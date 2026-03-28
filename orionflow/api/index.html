@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OrionFlow | Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans p-10 flex flex-col items-center justify-center min-h-screen">
+    <div class="max-w-3xl w-full bg-white rounded-xl shadow-lg border p-10 text-center">
+        <h1 class="text-4xl font-extrabold text-blue-600 mb-4">🌌 OrionFlow Control Center</h1>
+        <p class="text-gray-500 mb-8 border-b pb-8">Your distributed, event-sourced orchestration engine.</p>
+        
+        <div class="grid grid-cols-2 gap-6 mb-8">
+            <a href="/dashboard" class="block bg-gray-800 hover:bg-gray-900 text-white font-bold py-4 rounded-lg shadow transition-colors">
+                📊 Open Live Cluster Dashboard
+            </a>
+            <button onclick="triggerWorkflow()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg shadow transition-colors flex items-center justify-center space-x-2">
+                <span>🚀 Trigger DAG & Auto-Visualize</span>
+                <span id="loader" class="hidden animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full"></span>
+            </button>
+        </div>
+
+        <div class="text-left bg-gray-100 p-6 rounded text-sm text-gray-600 font-mono">
+            <strong>Payload to be injected:</strong>
+            <pre class="mt-2 text-xs">
+{
+  "dag": {
+    "Extract_Data": {"task_type": "extract", "priority": 5, "depends_on": []},
+    "Transform_Standard": {"task_type": "transform", "priority": 10, "depends_on": ["Extract_Data"]},
+    "Transform_Priority": {"task_type": "transform", "priority": 100, "depends_on": ["Extract_Data"]},
+    "Load_Database": {"task_type": "load", "priority": 50, "depends_on": ["Transform_Priority", "Transform_Standard"]}
+  }
+}
+            </pre>
+        </div>
+    </div>
+
+    <script>
+        async function triggerWorkflow() {
+            const btn = document.querySelector('button');
+            const loader = document.getElementById('loader');
+            loader.classList.remove('hidden');
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/api/v1/workflows/dag', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        dag: {
+                            Extract_Data: {task_type: "extract", priority: 5, depends_on: []},
+                            Transform_Standard: {task_type: "transform", priority: 10, depends_on: ["Extract_Data"]},
+                            Transform_Priority: {task_type: "transform", priority: 100, depends_on: ["Extract_Data"]},
+                            Load_Database: {task_type: "load", priority: 50, depends_on: ["Transform_Priority", "Transform_Standard"]}
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.workflow_id) {
+                    // Auto-redirect to the magical visualizer! No more copy-pasting.
+                    window.location.href = `/api/v1/workflows/${data.workflow_id}/visualize`;
+                } else {
+                    alert("Failed to start workflow.");
+                }
+            } catch(e) {
+                alert("Error triggering workflow.");
+            } finally {
+                loader.classList.add('hidden');
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

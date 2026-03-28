@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OrionFlow | Replay Render Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style> 
+      .timeline-group { border-left: 2px solid #3b82f6; padding-left: 10px; margin-bottom: 20px;} 
+      .task-event { font-family: monospace; font-size: 13px; padding: 6px; margin: 4px 0; border-radius: 4px; border: 1px solid #e5e7eb; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+      .bg-yellow-100 { background-color: #fef9c3 !important; }
+      .bg-green-100 { background-color: #dcfce3 !important; }
+      .bg-red-100 { background-color: #fee2e2 !important; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans p-6">
+    <div class="flex justify-between items-center mb-6">
+        <div>
+           <h1 class="text-3xl font-bold tracking-tight">Workflow Debug Trace</h1>
+           <p class="text-sm font-mono text-gray-500 mt-1" id="wfid"></p>
+        </div>
+        
+        <div class="flex space-x-6 items-center bg-white p-4 rounded-lg shadow border">
+            <div class="flex items-center space-x-2 border-r pr-6">
+                <span class="text-xl">🎬</span>
+                <div>
+                   <h3 class="font-bold text-gray-800 leading-tight">Replay Engine</h3>
+                   <p class="text-xs text-blue-600 font-bold">Event Sourced Animator</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <input type="range" id="replaySlider" min="0" max="0" value="0" class="w-64 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" oninput="scrubReplay()">
+                <div class="bg-gray-100 px-3 py-1 rounded text-sm font-mono font-bold w-12 text-center border" id="sliderValue">0</div>
+                <button onclick="togglePlay()" id="playBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 py-2 rounded-lg shadow transition-colors">Play</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="grid grid-cols-5 gap-6">
+        <div class="col-span-3">
+            <div class="bg-white p-6 rounded-lg shadow border h-[650px] flex flex-col">
+                <div class="mb-4 text-center">
+                    <h3 class="text-xl font-bold">Dynamic DAG Animation Canvas</h3>
+                    <p class="text-xs text-gray-500">Color transitions bound mathematically strictly to append-only chronological payload logs.</p>
+                </div>
+                <div id="mermaidContainer" class="flex-grow flex items-center justify-center overflow-auto"></div>
+            </div>
+        </div>
+        <div class="col-span-2">
+            <div class="bg-white p-6 rounded-lg shadow border h-[650px] flex flex-col">
+                <div class="mb-4 border-b pb-4">
+                    <h3 class="text-xl font-bold">Scalable Cluster Execution Trace</h3>
+                    <p class="text-xs text-gray-500 mt-1">Natively aggregates massive identical concurrent steps mapping dense event logic logs visually reducing timeline clutter dynamically.</p>
+                </div>
+                <div id="timelineContainer" class="flex-grow overflow-y-auto pr-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const wfId = window.location.pathname.split('/')[4];
+        document.getElementById('wfid').innerText = wfId;
+        
+        let allEvents = [];
+        let dagDef = {};
+        let isPlaying = false;
+        let playInterval;
+        let scaleState = 1;
+
+        mermaid.initialize({ startOnLoad: false, theme: 'base', themeVariables: { primaryColor: '#f9fafb', lineColor: '#9ca3af', clusterBkg: '#f3f4f6' } });
+
+        async function init() {
+            try {
+                const res = await fetch(`/api/v1/workflows/${wfId}/events`);
+                allEvents = await res.json();
+                if (allEvents.length === 0) return;
+                
+                const startEvent = allEvents[0];
+                dagDef = startEvent.details.dag || {};
+                
+                const slider = document.getElementById('replaySlider');
+                slider.max = allEvents.length;
+                slider.value = allEvents.length;
+                renderState(allEvents.length);
+            } catch(e) {}
+        }
+
+        async function renderState(eventIndexLimit) {
+            document.getElementById('sliderValue').innerText = eventIndexLimit;
+            const eventsToEval = allEvents.slice(0, eventIndexLimit);
+            
+            const states = {};
+            eventsToEval.forEach(ev => {
+                const step = ev.details.step_name;
+                if (!step) return;
+                if (ev.event_type === "TaskScheduled") states[step] = "scheduled";
+                if (ev.event_type === "TaskCompleted") states[step] = "success";
+                if (ev.event_type === "TaskFailed") states[step] = "failed";
+            });
+
+            let mGraph = "graph TD\n";
+            Object.keys(dagDef).forEach(node => {
+                const deps = dagDef[node].depends_on || [];
+                if (deps.length === 0) mGraph += `START((Start)) --> ${node}\n`;
+                deps.forEach(dep => { mGraph += `${dep} --> ${node}\n`; });
+            });
+            mGraph += "classDef success fill:#dcfce3,stroke:#22c55e,stroke-width:2px;\n";
+            mGraph += "classDef failed fill:#fee2e2,stroke:#ef4444,stroke-width:2px;\n";
+            mGraph += "classDef scheduled fill:#fef9c3,stroke:#eab308,stroke-width:2px;\n";
+            Object.entries(states).forEach(([step, state]) => mGraph += `class ${step} ${state};\n`);
+
+            scaleState++;
+            try {
+                const { svg } = await mermaid.render('mermaidSvg' + scaleState, mGraph);
+                document.getElementById('mermaidContainer').innerHTML = svg;
+            } catch(e) {}
+
+            let timelineHtml = "";
+            let currentType = null;
+            let groupHtml = "";
+            let groupCount = 0;
+            
+            eventsToEval.forEach(ev => {
+                const step = ev.details.step_name || 'Workflow Runtime';
+                const bg = ev.event_type === 'TaskScheduled' ? 'bg-yellow-100' : 
+                           ev.event_type === 'TaskCompleted' ? 'bg-green-100' : 
+                           ev.event_type === 'TaskFailed' ? 'bg-red-100' : 'bg-gray-100';
+                           
+                const errMark = ev.event_type === 'TaskFailed' ? `<br><span class="text-red-500 text-xs">${ev.details.error || 'Fault Detected'}</span>` : '';
+                const div = `<div class="task-event ${bg}"><b>${ev.timestamp.split('T')[1].substring(0,12)}</b> <span class="text-gray-400">|</span> <span class="font-bold text-gray-700">${step}</span> <span class="text-gray-400">|</span> ${ev.event_type} ${errMark}</div>`;
+                
+                if (currentType === ev.event_type + step) {
+                    groupHtml += div; groupCount++;
+                } else {
+                    if (groupCount > 0) {
+                        timelineHtml += `<div class="timeline-group">${groupHtml}</div>`;
+                    }
+                    currentType = ev.event_type + step;
+                    groupHtml = div;
+                    groupCount = 1;
+                }
+            });
+            if (groupCount > 0) timelineHtml += `<div class="timeline-group">${groupHtml}</div>`;
+            document.getElementById('timelineContainer').innerHTML = timelineHtml;
+            document.getElementById('timelineContainer').scrollTop = document.getElementById('timelineContainer').scrollHeight;
+        }
+
+        function scrubReplay() { renderState(parseInt(document.getElementById('replaySlider').value)); }
+
+        function togglePlay() {
+            const btn = document.getElementById('playBtn');
+            const slider = document.getElementById('replaySlider');
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                btn.innerText = "Pause";
+                if (parseInt(slider.value) === parseInt(slider.max)) { slider.value = 0; scrubReplay(); }
+                
+                playInterval = setInterval(() => {
+                    let val = parseInt(slider.value);
+                    if (val >= parseInt(slider.max)) { togglePlay(); return; }
+                    slider.value = val + 1;
+                    scrubReplay();
+                }, 400); 
+            } else {
+                btn.innerText = "Play";
+                clearInterval(playInterval);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

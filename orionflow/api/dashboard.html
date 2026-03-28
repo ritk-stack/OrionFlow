@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OrionFlow Live Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans p-6 overflow-x-hidden">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold text-blue-400">OrionFlow Global Dashboard</h1>
+        <span class="bg-green-600 px-3 py-1 rounded text-sm font-bold animate-pulse">LIVE POLLING</span>
+    </div>
+    
+    <!-- Top Stats -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-gray-800 p-4 rounded shadow border-l-4 border-yellow-400">
+            <h3 class="text-gray-400 text-sm font-bold uppercase tracking-wider">Queued</h3>
+            <p id="stat-queued" class="text-4xl font-bold text-yellow-400 mt-2">0</p>
+        </div>
+        <div class="bg-gray-800 p-4 rounded shadow border-l-4 border-blue-400">
+            <h3 class="text-gray-400 text-sm font-bold uppercase tracking-wider">Running</h3>
+            <p id="stat-running" class="text-4xl font-bold text-blue-400 mt-2">0</p>
+        </div>
+        <div class="bg-gray-800 p-4 rounded shadow border-l-4 border-green-400">
+            <h3 class="text-gray-400 text-sm font-bold uppercase tracking-wider">Completed</h3>
+            <p id="stat-completed" class="text-4xl font-bold text-green-400 mt-2">0</p>
+        </div>
+        <div class="bg-gray-800 p-4 rounded shadow border-l-4 border-red-500">
+            <h3 class="text-gray-400 text-sm font-bold uppercase tracking-wider">Failed</h3>
+            <p id="stat-failed" class="text-4xl font-bold text-red-500 mt-2">0</p>
+        </div>
+    </div>
+    
+    <div class="grid grid-cols-2 gap-6 mb-6">
+        <!-- Worker Activity -->
+        <div class="bg-gray-800 p-4 rounded shadow h-80 flex flex-col">
+            <h3 class="text-xl font-bold mb-4 text-gray-200">Worker Cluster Activity</h3>
+            <div id="workers-list" class="space-y-2 overflow-y-auto flex-grow pr-2"></div>
+        </div>
+        <!-- Failure Analysis -->
+        <div class="bg-gray-800 p-4 rounded shadow h-80 flex flex-col">
+            <h3 class="text-xl font-bold mb-4 text-gray-200">Failure Group Analysis</h3>
+            <div id="failures-list" class="space-y-2 overflow-y-auto flex-grow pr-2"></div>
+        </div>
+    </div>
+    
+    <div class="grid grid-cols-2 gap-6">
+        <!-- Pressure Chart -->
+        <div class="bg-gray-800 p-4 rounded shadow h-72">
+            <h3 class="text-xl font-bold mb-4 text-gray-200">Queue Pressure (Task Completes/10s)</h3>
+            <div class="h-48 relative"><canvas id="pressureChart"></canvas></div>
+        </div>
+        <!-- Heatmap -->
+        <div class="bg-gray-800 p-4 rounded shadow h-72">
+            <h3 class="text-xl font-bold mb-4 text-gray-200">Task Latency Heatmap (Wait Time ms)</h3>
+            <div class="h-48 relative"><canvas id="heatmapChart"></canvas></div>
+        </div>
+    </div>
+
+    <script>
+        const ctxPressure = document.getElementById('pressureChart').getContext('2d');
+        const pressureChart = new Chart(ctxPressure, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'Completed Tasks', borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', data: [], tension: 0.3, fill: true }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' } }, y: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' } } }, plugins: { legend: { labels: { color: '#9ca3af' } } } }
+        });
+        
+        const ctxHeatmap = document.getElementById('heatmapChart').getContext('2d');
+        const heatmapChart = new Chart(ctxHeatmap, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'Avg Wait Time (ms)', backgroundColor: '#f59e0b', data: [] }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' } }, y: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' } } }, plugins: { legend: { labels: { color: '#9ca3af' } } } }
+        });
+
+        async function fetchDashboard() {
+            try {
+                const res = await fetch('/api/v1/dashboard/data');
+                const data = await res.json();
+                
+                document.getElementById('stat-queued').innerText = data.counts.queued;
+                document.getElementById('stat-running').innerText = data.counts.running;
+                document.getElementById('stat-completed').innerText = data.counts.completed;
+                document.getElementById('stat-failed').innerText = data.counts.failed;
+                
+                const wList = document.getElementById('workers-list');
+                wList.innerHTML = data.workers.length === 0 ? '<div class="text-gray-500 text-center mt-10">No workers historically detected (Awaiting Heartbeat)</div>' : 
+                data.workers.map(w => `
+                    <div class="flex justify-between items-center bg-gray-700 p-3 rounded">
+                        <span class="font-mono text-sm text-gray-200">${w.worker_id}</span>
+                        <div class="flex items-center space-x-3 w-1/2 justify-end">
+                            <span class="text-xs text-gray-400 truncate max-w-xs block">${w.current_task_id || 'Waiting for Poll...'}</span>
+                            <span class="text-xs font-bold px-2 py-1 rounded w-16 text-center ${w.status === 'BUSY' ? 'bg-blue-600' : w.status === 'OFFLINE' ? 'bg-red-600' : 'bg-gray-500'}">${w.status}</span>
+                        </div>
+                    </div>
+                `).join('');
+                
+                const fList = document.getElementById('failures-list');
+                fList.innerHTML = data.failures.length === 0 ? '<div class="text-green-500 font-bold text-center mt-10">No System Failures Detected! &#127881;</div>' : 
+                data.failures.map(f => `
+                    <div class="flex justify-between items-center bg-gray-700 p-3 rounded border-l-4 border-red-500">
+                        <span class="text-gray-200 font-bold w-1/3">${f.task_type}</span>
+                        <span class="text-red-400 font-bold w-1/4 text-center">${f.count} errors</span>
+                        <span class="text-xs text-gray-400 font-mono text-right">${f.last_occurrence.split('T')[1].substring(0,8)}</span>
+                    </div>
+                `).join('');
+                
+                const times = data.timeseries.map(t => t.time.substring(11, 16));
+                const completed = data.timeseries.map(t => t.completed);
+                const wait = data.timeseries.map(t => t.avg_wait);
+                
+                pressureChart.data.labels = times;
+                pressureChart.data.datasets[0].data = completed;
+                pressureChart.update();
+                
+                heatmapChart.data.labels = times;
+                heatmapChart.data.datasets[0].data = wait;
+                heatmapChart.update();
+            } catch(e) {}
+        }
+
+        setInterval(fetchDashboard, 1000);
+        fetchDashboard();
+    </script>
+</body>
+</html>
